@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { ActivityIndicator, Image, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { rotateImage } from '../modules/imaging';
 import { toBase64Image } from '../utils/base64';
 import { Agent } from '../agent/Agent';
@@ -9,7 +9,7 @@ import { textToSpeech } from '../modules/openai';
 function usePhotos(device: BluetoothRemoteGATTServer) {
 
     // Subscribe to device
-    const [photos, setPhotos] = React.useState<Uint8Array[]>([]);
+    const [photos, setPhotos] = React.useState<Array<{ data: Uint8Array; timestamp: number }>>([]);
     const [subscribed, setSubscribed] = React.useState<boolean>(false);
     React.useEffect(() => {
         (async () => {
@@ -31,9 +31,10 @@ function usePhotos(device: BluetoothRemoteGATTServer) {
                 } else {
                     if (id === null) {
                         console.log('Photo received', buffer);
+                        const timestamp = Date.now(); // Get current timestamp
                         rotateImage(buffer, '270').then((rotated) => {
                             console.log('Rotated photo', rotated);
-                            setPhotos((p) => [...p, rotated]);
+                            setPhotos((p) => [...p, { data: rotated, timestamp: timestamp }]); // Store data and timestamp
                         });
                         previousChunk = -1;
                         return;
@@ -80,6 +81,7 @@ export const DeviceView = React.memo((props: { device: BluetoothRemoteGATTServer
     const [subscribed, photos] = usePhotos(props.device);
     const agent = React.useMemo(() => new Agent(), []);
     const agentState = agent.use();
+    const [activePhotoIndex, setActivePhotoIndex] = React.useState<number | null>(null);
 
     // Background processing agent
     const processedPhotos = React.useRef<Uint8Array[]>([]);
@@ -94,38 +96,48 @@ export const DeviceView = React.memo((props: { device: BluetoothRemoteGATTServer
         });
     }, []);
     React.useEffect(() => {
-        processedPhotos.current = photos;
+        processedPhotos.current = photos.map(p => p.data);
         sync.invalidate();
     }, [photos]);
 
-    React.useEffect(() => {
-        if (agentState.answer) {
-            textToSpeech(agentState.answer)
-        }
-    }, [agentState.answer])
-
     return (
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-                    {photos.map((photo, index) => (
-                        <Image key={index} style={{ width: 100, height: 100 }} source={{ uri: toBase64Image(photo) }} />
+            {/* Display photos in a grid filling the screen */}
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#111' }}>
+                <ScrollView contentContainerStyle={{ flexDirection: 'row', flexWrap: 'wrap', padding: 5 }}>
+                    {photos.slice().reverse().map((photo, index) => ( // Display newest first
+                        <Pressable
+                            key={photos.length - 1 - index} // Use original index for key stability if needed
+                            onPressIn={() => setActivePhotoIndex(photos.length - 1 - index)}
+                            onPressOut={() => setActivePhotoIndex(null)}
+                            style={{
+                                position: 'relative',
+                                width: '33%', // Roughly 3 images per row
+                                aspectRatio: 1, // Make images square
+                                padding: 2 // Add spacing
+                            }}
+                        >
+                            <Image style={{ width: '100%', height: '100%', borderRadius: 5 }} source={{ uri: toBase64Image(photo.data) }} />
+                            {activePhotoIndex === (photos.length - 1 - index) && (
+                                <View style={{
+                                    position: 'absolute',
+                                    bottom: 2, // Adjusted for padding
+                                    left: 2,
+                                    right: 2,
+                                    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                                    paddingVertical: 3,
+                                    paddingHorizontal: 5,
+                                    alignItems: 'center',
+                                    borderRadius: 3
+                                }}>
+                                    <Text style={{ color: 'white', fontSize: 10 }}>
+                                        {new Date(photo.timestamp).toLocaleTimeString()}
+                                    </Text>
+                                </View>
+                            )}
+                        </Pressable>
                     ))}
-                </View>
-            </View>
-
-            <View style={{ backgroundColor: 'rgb(28 28 28)', height: 600, width: 600, borderRadius: 64, flexDirection: 'column', padding: 64 }}>
-                <View style={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center' }}>
-                    {agentState.loading && (<ActivityIndicator size="large" color={"white"} />)}
-                    {agentState.answer && !agentState.loading && (<ScrollView style={{ flexGrow: 1, flexBasis: 0 }}><Text style={{ color: 'white', fontSize: 32 }}>{agentState.answer}</Text></ScrollView>)}
-                </View>
-                <TextInput
-                    style={{ color: 'white', height: 64, fontSize: 32, borderRadius: 16, backgroundColor: 'rgb(48 48 48)', padding: 16 }}
-                    placeholder='What do you need?'
-                    placeholderTextColor={'#888'}
-                    readOnly={agentState.loading}
-                    onSubmitEditing={(e) => agent.answer(e.nativeEvent.text)}
-                />
+                </ScrollView>
             </View>
         </View>
     );
